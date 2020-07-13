@@ -1,0 +1,233 @@
+---
+title: "Prediction Assignment Writeup"
+author: "Abid Al Reza"
+date: "7/13/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, warning=FALSE, message=FALSE)
+```
+
+
+## Overview
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. 
+
+In this project, we used data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. This data contains two different data sets: Training data set and testing dataset.
+
+More information regarding the dataset is available from the website here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+Our objective in this project was to use the training data set to develop models that can be used on testing data set to predict the "classe" variable which indicates the manner in which the subject performed the exercise. We applied three different approach to develop models. These approaches are:
+- Decision Tree method
+- Random Forest method
+- Generalized Boosted method
+
+We evaluated the accuracy level of each model and used the best model as our final model to predict the "classe" 20 subjects in the testing dataset.
+
+
+## Data loading and processing
+
+```{r Data loading and processing}
+# Loading necessary packages
+if(!require(caret)){install.packages('caret')}; library(caret)
+if(!require(ggplot2)){install.packages('ggplot2')}; library(ggplot2)
+if(!require(rpart)){install.packages('rpart')}; library(rpart)
+if(!require(rpart.plot)){install.packages('rpart.plot2')}; library(rpart.plot)
+if(!require(rattle)){install.packages('rattle')}; library(rattle)
+if(!require(randomForest)){install.packages('randomForest')}; library(randomForest)
+if(!require(corrplot)){install.packages('corrplot')}; library(corrplot)
+if(!require(knitr)){install.packages('knitr')}; library(knitr)
+if(!require(stringr)){install.packages('stringr')}; library(stringr)
+if(!require(dplyr)){install.packages('dplyr')}; library(dplyr)
+
+# Downloading data the working directory
+if(!file.exists("pml-training.csv")){
+    url = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+    download.file(url,destfile = "pml-training.csv", mode = "wb") 
+}
+
+if(!file.exists("pml-testing.csv")){
+    url = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+    download.file(url,destfile = "pml-testing.csv", mode = "wb") 
+}
+
+# Loading data
+training_data <- read.csv("pml-training.csv", header = TRUE)
+testing_data <- read.csv("pml-testing.csv", header = TRUE)
+
+dim(training_data)
+
+dim(testing_data)
+```
+
+Both training and testing data set contains 160 variables among which first seven are related to specific subject identification and time stamps. Also, some variables have near zero variance, which means they have no impact on "classe" determination. And finally, some other variables have more than 90% "NA" values. We have excluded these variables from our model building process.
+```{r data processing}
+# First 7 columns removal
+training_data_clean <- training_data[,-c(1:7)]
+testing_data_clean <- testing_data[,-c(1:7)]
+dim(testing_data_clean)
+
+# Removal of variables with near zero variance
+nzv  <- nearZeroVar(training_data_clean)
+training_data_clean<- training_data_clean[,-nzv]
+testing_data_clean<- testing_data_clean[,-nzv]
+
+#  Removal of variables with near zero variance
+NA_col_remove<- which(colSums(is.na(training_data_clean))>0.9*dim(training_data_clean[1])[1])
+training_data_clean<- (training_data_clean[,-NA_col_remove])
+testing_data_clean<- (testing_data_clean[,-NA_col_remove])
+
+dim(training_data_clean)
+dim(testing_data_clean)
+```
+
+Now, we have 53 (including "classe") variables left and we will use these variables to develop our models. First we will split the  processed training data at 70:30 ratio into `trainSet` and `testSet`. 
+
+```{r train data partition}
+# seed setup for reproducibility
+set.seed(12345)
+
+# train data partitioning
+inTrain<- createDataPartition(training_data_clean$classe, p=0.7, list=FALSE)
+trainSet<- training_data_clean[inTrain,]
+testSet<- training_data_clean[-inTrain,]
+```
+
+### Correlation analysis
+
+The correlation plot below depicts the correlation of the 53 variables with each other. 
+
+```{r Correlation analysis, fig.height= 12, fig.width=12}
+## correlation matrix development and plotting
+correlation_matrix<-cor(trainSet[,-53])
+
+corrplot(correlation_matrix, order = "FPC", method = "color", type = "upper", 
+         tl.cex = 0.8, tl.col = "black")
+```
+
+The highly correlated variables are shown in dark colors.  
+
+## Prediction model building
+
+`trainSet` will be used to develop and train the regression models and `testSet` will be used to validate the models and to determine the prediction accuracy of these models. 
+
+A Confusion Matrix is plotted at the end of each analysis to better visualize the accuracy of the models.
+
+### a) Decision tree method
+
+```{r decision tree method, fig.height= 6, fig.width=12}
+## model building
+decision_tree_model <- train(classe~., data= trainSet, method="rpart")
+## plotting model
+fancyRpartPlot(decision_tree_model$finalModel)
+## prediction
+decision_tree_predict <- predict(decision_tree_model, newdata = testSet)
+## confusion matrix
+decision_tree_conf_mat<- confusionMatrix(decision_tree_predict , testSet$classe)
+
+decision_tree_conf_mat$table
+
+decision_tree_conf_mat$overall
+## plotting confusion matrix
+decision_tree_conf_mat$table%>%
+    data.frame() %>% 
+    mutate(Prediction = factor(Prediction)) %>%
+    group_by(Reference) %>% 
+    mutate(
+        total = sum(Freq),
+        frac = Freq / total 
+    ) %>%
+    ggplot(aes(x=Reference,y= reorder(Prediction, desc(Prediction)),  fill = Freq)) +
+    geom_tile() +
+    geom_text(aes(label = str_c(Freq, ", ", round(frac * 100,2), "%")), size = 5) +
+    scale_fill_gradient(low = "grey", high="turquoise4") +
+    scale_x_discrete(position = "top") +
+    xlab("Reference")+ ylab ("Prediction")+
+    geom_tile(color = "black", fill = "black", alpha = 0)+
+    ggtitle(str_c("Decision Tree model - Accuracy: ",
+                  round(decision_tree_conf_mat$overall[1]*100,2) , "%"))
+```
+
+In this model, the accuracy level is 48.95% and the out of sample error rate is 51.05%. According to these outcomes we can say that the decision tree model will not be able to predict the classe for unknown efficiently. 
+
+Note: For this method default resampling approach was applied. 
+
+### b) Random tree method
+```{r Random tree method, fig.height= 6, fig.width=12}
+## model building
+random_forest_model <- randomForest(classe~., data= trainSet)
+## prediction
+random_forest_predict <- predict(random_forest_model, newdata = testSet)
+## confusion matrix
+random_forest_conf_mat <- confusionMatrix(random_forest_predict , testSet$classe)
+
+random_forest_conf_mat$table
+
+random_forest_conf_mat$overall
+## plotting confusion matrix
+random_forest_conf_mat$table %>%
+    data.frame() %>% 
+    mutate(Prediction = factor(Prediction)) %>%
+    group_by(Reference) %>% 
+    mutate(
+        total = sum(Freq),
+        frac = Freq / total 
+    ) %>%
+    ggplot(aes( x= Reference, y= reorder(Prediction, desc(Prediction)),fill = Freq)) +
+    geom_tile() +
+    geom_text(aes(label = str_c(Freq, ", ", round(frac * 100,2), "%")), size = 5) +
+    scale_fill_gradient(low = "grey", high="chartreuse4") +
+    scale_x_discrete(position = "top") +
+    xlab("Reference")+ ylab ("Prediction")+
+    geom_tile(color = "black", fill = "black", alpha = 0)+
+    ggtitle(str_c("Random Forest model - Accuracy: ",round(random_forest_conf_mat$overall[1]*100,2) , "%"))
+
+```
+
+The accuracy level for this model is 99.64% and the out of sample error rate is 0.36%. 
+
+Note: For this method default resampling approach was applied. 
+
+### c) Generalized boosted method
+
+```{r Generalized boosted method, fig.height= 6, fig.width=12}
+## control parameter setup
+controlGBM <- trainControl(method = "repeatedcv", number = 5, repeats = 1)
+## model building
+gbm_model <- train(classe~., data= trainSet, method="gbm",trControl = controlGBM, verbose=FALSE)
+
+## prediction
+gbm_predict <- predict(gbm_model, newdata = testSet)
+## confusion matrix
+gbm_conf_mat <- confusionMatrix(gbm_predict , testSet$classe)
+gbm_conf_mat$table
+gbm_conf_mat$overall
+## plotting confusion matrix
+gbm_conf_mat$table%>%
+    data.frame() %>% 
+    mutate(Prediction = factor(Prediction)) %>%
+    group_by(Reference) %>% 
+    mutate(
+        total = sum(Freq),
+        frac = Freq / total 
+    ) %>%
+    ggplot(aes(x=Reference,y= reorder(Prediction, desc(Prediction)),  fill = Freq)) +
+    geom_tile() +
+    geom_text(aes(label = str_c(Freq, ", ", round(frac * 100,2), "%")), size = 5) +
+    scale_fill_gradient(low = "grey", high="steelblue") +
+    scale_x_discrete(position = "top") +
+    xlab("Reference")+ ylab ("Prediction")+
+    geom_tile(color = "black", fill = "black", alpha = 0)+
+    ggtitle(str_c("GBM model - Accuracy: ",round(gbm_conf_mat$overall[1]*100,2) , "%"))
+```
+
+For GBM model has 96.13% accuracy and 3.87% out of sample error rate.
+
+
+## Best model
+Here, Both random forest and GBM models have above 95% accuracy. Whereas, the decision tree model is a very poor model with below 50% accuracy. Random forest model is the best as it has the highest accuracy level (99.64%). we use this model to predict the "classe" of the samples in the test data set. 
+```{r Best model}
+predict(random_forest_model,newdata=testing_data_clean)
+```
+
